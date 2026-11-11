@@ -26,7 +26,6 @@ class NetworkService {
   void connectMqtt();
   void publishDiscovery();
   void publishStates(bool force = false);
-  String nightStatus();
   void publishRing();
   void publishBacklight();
   void onMqtt(char* topic, uint8_t* payload, unsigned int length);
@@ -34,6 +33,7 @@ class NetworkService {
   void sendSetup();
   void sendStatus();
   void appendRingForm(String& page);
+  String nightStatus();
   void handleSave();
   void handleRing();
   void handleUpdate();

@@ -1101,7 +1101,7 @@ void NetworkService::handleRing() {
     if (isnan(cfg.nightLat) || isnan(cfg.nightLon)) cfg.nightLat = cfg.nightLon = NAN;
     cfg.save();
     nightMode().refresh();
-    if (mqtt_.connected()) publishStates(true);
+    if (mqtt_.connected()) publishStates();
   }
   if (server_.hasArg("brightness")) {
     int bright = server_.arg("brightness").toInt();
