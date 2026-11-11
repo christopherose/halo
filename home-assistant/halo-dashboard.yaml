@@ -1,6 +1,6 @@
 # HALO air quality dashboard for Home Assistant
 # Paste into a new dashboard's Raw configuration editor. See the README for setup.
-# Entity IDs match a HALO on the LVGL firmware with default names.
+# Entity IDs match a HALO on the official LVGL firmware with default names.
 # A second HALO gets _2 at the end of each entity ID; see the README.
 
 title: Air Quality
@@ -96,12 +96,12 @@ views:
                 color: "#F44336"
               - from: 125.5
                 color: "#9C27B0"
-          # Same bands as the ring light: 1200 / 2000 / 5000 ppm
+          # Same bands as the ring light: 1200 / 2000 / 3000 ppm
           - type: gauge
             entity: sensor.halo_air_quality_sensor_co2
             name: CO₂
             min: 400
-            max: 3000
+            max: 4000
             needle: true
             grid_options:
               columns: 12
@@ -112,6 +112,8 @@ views:
                 color: "#FFC107"
               - from: 2000
                 color: "#FF9800"
+              - from: 3000
+                color: "#F44336"
 
       # ── Trends (left two-thirds) ─────────────────────────
       - type: grid
