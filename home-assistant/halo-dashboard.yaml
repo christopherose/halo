@@ -1,0 +1,275 @@
+# HALO air quality dashboard for Home Assistant
+# Paste into a new dashboard's Raw configuration editor. See the README for setup.
+# Entity IDs match a HALO on the LVGL firmware with default names.
+# A second HALO gets _2 at the end of each entity ID; see the README.
+
+title: Air Quality
+views:
+  - title: Air
+    path: air
+    icon: mdi:air-filter
+    type: sections
+    max_columns: 3
+    sections:
+      # ── Header: verdict + gauges ─────────────────────────
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: Halo
+            heading_style: title
+            icon: mdi:air-filter
+            badges:
+              - type: entity
+                entity: sensor.halo_air_quality_sensor_voc_quality
+                show_state: true
+                icon: mdi:molecule
+              - type: entity
+                entity: sensor.halo_air_quality_sensor_rssi
+                show_state: true
+                icon: mdi:wifi
+              - type: entity
+                entity: update.halo_air_quality_sensor_firmware
+                show_state: true
+                visibility:
+                  - condition: state
+                    entity: update.halo_air_quality_sensor_firmware
+                    state: "on"
+          - type: markdown
+            grid_options:
+              columns: full
+            content: >-
+              {% set aqi = states('sensor.halo_air_quality_sensor_computed_aqi') | int(0) %}
+              {% set pm = states('sensor.halo_air_quality_sensor_pm_2_5mm_weight_concentration') | float(0) %}
+              {% set co2 = states('sensor.halo_air_quality_sensor_co2') | int(0) %}
+              {% set rh = states('sensor.halo_air_quality_sensor_sen55_humidity') | int(0) %}
+              {% set bands = [
+                [50, 'Good', '🟢', 'Air is clean. Nothing to do.'],
+                [100, 'Moderate', '🟡', 'Acceptable. Sensitive people may notice it.'],
+                [150, 'Unhealthy for sensitive groups', '🟠', 'Ventilate or run a HEPA purifier.'],
+                [200, 'Unhealthy', '🔴', 'Find the source: humidifiers, diffusers, candles, cooking, furnace.'],
+                [300, 'Very unhealthy', '🟣', 'Ventilate now and run a purifier.'],
+                [9999, 'Hazardous', '⚫', 'Ventilate and leave the area if you can.']] %}
+              {% set ns = namespace(b=bands[-1]) %}
+              {% for b in bands | reverse %}{% if aqi <= b[0] %}{% set ns.b = b %}{% endif %}{% endfor %}
+              ## {{ ns.b[2] }} AQI {{ aqi }} · {{ ns.b[1] }}
+
+              PM2.5 **{{ pm | round(1) }} µg/m³** · CO₂ **{{ co2 }} ppm** · Humidity **{{ rh }}%**
+
+              {{ ns.b[3] }}
+          - type: gauge
+            entity: sensor.halo_air_quality_sensor_computed_aqi
+            name: AQI
+            min: 0
+            max: 300
+            needle: true
+            grid_options:
+              columns: 12
+            segments: &aqi_bands
+              - from: 0
+                color: "#4CAF50"
+              - from: 51
+                color: "#FFC107"
+              - from: 101
+                color: "#FF9800"
+              - from: 151
+                color: "#F44336"
+              - from: 201
+                color: "#9C27B0"
+          # EPA 2024 PM2.5 breakpoints
+          - type: gauge
+            entity: sensor.halo_air_quality_sensor_pm_2_5mm_weight_concentration
+            name: PM2.5
+            min: 0
+            max: 150
+            needle: true
+            grid_options:
+              columns: 12
+            segments:
+              - from: 0
+                color: "#4CAF50"
+              - from: 9.1
+                color: "#FFC107"
+              - from: 35.5
+                color: "#FF9800"
+              - from: 55.5
+                color: "#F44336"
+              - from: 125.5
+                color: "#9C27B0"
+          # Same bands as the ring light: 1200 / 2000 / 5000 ppm
+          - type: gauge
+            entity: sensor.halo_air_quality_sensor_co2
+            name: CO₂
+            min: 400
+            max: 3000
+            needle: true
+            grid_options:
+              columns: 12
+            segments:
+              - from: 400
+                color: "#4CAF50"
+              - from: 1200
+                color: "#FFC107"
+              - from: 2000
+                color: "#FF9800"
+
+      # ── Trends (left two-thirds) ─────────────────────────
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Last 24 hours
+            icon: mdi:chart-line
+          - type: history-graph
+            title: Particles
+            hours_to_show: 24
+            grid_options:
+              columns: full
+              rows: 5
+            entities:
+              - entity: sensor.halo_air_quality_sensor_pm_1mm_weight_concentration
+                name: PM1
+              - entity: sensor.halo_air_quality_sensor_pm_2_5mm_weight_concentration
+                name: PM2.5
+              - entity: sensor.halo_air_quality_sensor_pm_10mm_weight_concentration
+                name: PM10
+          - type: history-graph
+            title: CO₂
+            hours_to_show: 24
+            grid_options:
+              columns: 12
+              rows: 4
+            entities:
+              - entity: sensor.halo_air_quality_sensor_co2
+                name: CO₂
+          - type: history-graph
+            title: VOC & NOx index
+            hours_to_show: 24
+            grid_options:
+              columns: 12
+              rows: 4
+            entities:
+              - entity: sensor.halo_air_quality_sensor_sen55_voc
+                name: VOC
+              - entity: sensor.halo_air_quality_sensor_sen55_nox
+                name: NOx
+          - type: statistics-graph
+            title: PM2.5 daily average
+            entities:
+              - entity: sensor.halo_air_quality_sensor_pm_2_5mm_weight_concentration
+                name: PM2.5
+            stat_types:
+              - mean
+              - max
+            chart_type: line
+            period: day
+            days_to_show: 30
+            grid_options:
+              columns: full
+              rows: 4
+
+      # ── Comfort (right column) ─────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Comfort
+            icon: mdi:home-thermometer
+          - type: tile
+            entity: sensor.halo_air_quality_sensor_sen55_temperature
+            name: Temperature
+            icon: mdi:thermometer
+            color: orange
+          - type: tile
+            entity: sensor.halo_air_quality_sensor_sen55_humidity
+            name: Humidity
+            icon: mdi:water-percent
+            color: blue
+          - type: tile
+            entity: sensor.halo_air_quality_sensor_sen55_voc
+            name: VOC index
+            icon: mdi:molecule
+            color: green
+          - type: tile
+            entity: sensor.halo_air_quality_sensor_sen55_nox
+            name: NOx index
+            icon: mdi:smog
+            color: amber
+
+      # ── Device ───────────────────────────────────────────
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: Device
+            icon: mdi:chip
+          - type: tile
+            entity: light.halo_air_quality_sensor_halo
+            name: Ring light
+            icon: mdi:circle-outline
+            grid_options:
+              columns: 12
+            features_position: inline
+            features:
+              - type: light-brightness
+          - type: tile
+            entity: light.halo_air_quality_sensor_display_backlight
+            name: Screen
+            icon: mdi:monitor
+            grid_options:
+              columns: 12
+            features_position: inline
+            features:
+              - type: light-brightness
+          - type: tile
+            entity: switch.halo_air_quality_sensor_auto_page_rotation
+            name: Page rotation
+            icon: mdi:page-next-outline
+            grid_options:
+              columns: 6
+          - type: tile
+            entity: update.halo_air_quality_sensor_firmware
+            name: Firmware
+            grid_options:
+              columns: 6
+          - type: tile
+            entity: button.halo_air_quality_sensor_clean_sen55
+            name: Clean SEN55
+            icon: mdi:fan-plus
+            color: teal
+            grid_options:
+              columns: 12
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.halo_air_quality_sensor_clean_sen55
+              confirmation:
+                text: Run the SEN55 fan clean? (~10 s at full speed)
+          - type: tile
+            entity: button.halo_air_quality_sensor_calibrate_scd40_to_420ppm
+            name: Calibrate CO₂ (outdoors only)
+            icon: mdi:tune-vertical
+            color: amber
+            grid_options:
+              columns: 12
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.halo_air_quality_sensor_calibrate_scd40_to_420ppm
+              confirmation:
+                text: Only do this after 5+ minutes in fresh outdoor air. Calibrate CO₂ to 420 ppm?
+          - type: tile
+            entity: button.halo_air_quality_sensor_esp_reboot
+            name: Reboot
+            icon: mdi:restart
+            color: red
+            grid_options:
+              columns: 12
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.halo_air_quality_sensor_esp_reboot
+              confirmation:
+                text: Reboot the Halo?

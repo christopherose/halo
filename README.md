@@ -74,3 +74,24 @@ If esptool can't find the board, it may need download mode: hold **BOOT**, tap *
 - **Want stock firmware back?** Use the update button in Home Assistant or on the HALO's web page, or the [official installer](https://github.com/yashmulgaonkar/halo).
 
 > ⚠️ Updating from Home Assistant or the HALO's web page installs **stock** firmware and undoes this change. To stay on this fork, update from this repo's releases instead.
+
+---
+
+## Home Assistant dashboard
+
+[`home-assistant/halo-dashboard.yaml`](home-assistant/halo-dashboard.yaml) is a ready-made dashboard: a plain-English air verdict, AQI / PM2.5 / CO₂ gauges, 24-hour trends, a 30-day PM2.5 chart, comfort readings, and device controls (ring light, screen, SEN55 fan clean, CO₂ calibration, reboot). The CO₂ gauge uses the same 1200 / 2000 / 5000 bands as the ring.
+
+**Setup**
+
+1. Get HALO into Home Assistant over MQTT (Settings → Devices & services → MQTT). It shows up as **Halo Air Quality Sensor**.
+2. Go to **Settings → Dashboards → Add dashboard → New dashboard from scratch**. Name it something like *Air Quality*.
+3. Open the new dashboard, click the **pencil** (edit), then **⋮ → Raw configuration editor**.
+4. Replace everything there with the contents of `halo-dashboard.yaml` and click **Save**.
+
+**Notes**
+
+- The entity IDs match a HALO with default names. If you renamed it, or this is your second HALO (Home Assistant adds `_2` to the end of each ID, e.g. `sensor.halo_air_quality_sensor_co2_2`), update the IDs in the file before pasting. You can find them under Settings → Devices & services → Entities.
+- Builds with a **SEN54** instead of a SEN55 have no NOx sensor, so the NOx tile and graph line stay empty. Delete them if you like.
+- The 30-day PM2.5 chart fills in as history builds up.
+- Only press **Calibrate CO₂** after HALO has sat outdoors in fresh air for 5+ minutes.
+- Tested on Home Assistant 2026.11.
