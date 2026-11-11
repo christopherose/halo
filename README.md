@@ -4,7 +4,17 @@
 
 This is a fork of [yashmulgaonkar/halo](https://github.com/yashmulgaonkar/halo), the open-source HALO air quality sensor. For the hardware, parts list, build guide and everything else, see the **[original repo](https://github.com/yashmulgaonkar/halo)**.
 
-This fork changes one thing in the LVGL firmware (new UI): the **CO₂ color bands**. Stock firmware turns CO₂ yellow at 600 ppm, but a closed-up house with a few people in it normally sits at 800–1200 ppm, so the ring looks like something is wrong all winter.
+This fork makes three changes to the LVGL firmware (new UI):
+
+1. **Relaxed CO₂ colors**: yellow starts at 1200 ppm instead of 600.
+2. **Auto Night Mode**: dims the ring and screen from sunset to sunrise.
+3. **Fewer MQTT updates**: about 70% fewer Home Assistant database writes.
+
+Everything else matches the upstream release it's built on ([see the diff](https://github.com/yashmulgaonkar/halo/compare/lvgl-2026.11.10.1...christopherose:halo:co2-thresholds)).
+
+### Relaxed CO₂ colors
+
+Stock firmware turns CO₂ yellow at 600 ppm, but a closed-up house with a few people in it normally sits at 800–1200 ppm, so the ring looks like something is wrong all winter.
 
 | CO₂ (ppm) | Stock | This fork |
 |---|---|---|
@@ -16,7 +26,32 @@ This fork changes one thing in the LVGL firmware (new UI): the **CO₂ color ban
 | 2000–5000 | 🔴 | 🟠 |
 | > 5000 | 🔴 | 🔴 |
 
-The ring light, the on-screen CO₂ value and the device web page all use the new bands. The ring still shows the worse of AQI and CO₂. Everything else matches the upstream release it's built on ([see the diff](https://github.com/yashmulgaonkar/halo/compare/lvgl-2026.11.10.1...christopherose:halo:co2-thresholds)).
+The ring light, the on-screen CO₂ value and the device web page all use the new bands. The ring still shows the worse of AQI and CO₂.
+
+### Auto Night Mode
+
+From sunset to sunrise the ring drops to 5% and the screen to 15%. At sunrise they go back to where they were. If you change the brightness during the night, your change sticks. Night mode only ever dims, so a ring or screen that's already dimmer is left alone.
+
+Turn it on from the HALO's setup page (`http://<halo-ip>/setup`): tick **Auto Night Mode** under *Ring* and click **Apply brightness**. Home Assistant also gets an *Auto Night Mode* switch.
+
+Sunrise and sunset are calculated on the device, and they shift through the year on their own. Out of the box HALO guesses your location from its timezone, which can be off by an hour or so. For exact times, enter your **latitude and longitude** in the same form. To find them, right-click your house in [Google Maps](https://maps.google.com) and click the numbers at the top of the menu to copy them (for example `41.88, -87.63`). The setup page shows the next sunset and sunrise so you can check them.
+
+### Fewer MQTT updates
+
+Stock firmware publishes every reading every 10 seconds. Home Assistant writes a new database row each time a value changes, so tiny wobbles (PM2.5 going 0.5 → 0.6 → 0.5) add up to ~40,000 rows a day from one HALO. With this fork it's closer to 10,000.
+
+This fork still reads the sensors every 10 seconds, but it only sends a value when it moves by more than a small amount:
+
+| Reading | Sent when it changes by |
+|---|---|
+| PM1 / PM2.5 / PM4 / PM10 | 5% (at least 0.5 µg/m³) |
+| CO₂ | 5 ppm |
+| AQI | 1 (and only alongside a PM2.5 update, since AQI is calculated from PM2.5) |
+| Temperature | 0.2° |
+| Humidity | 1% |
+| Everything else | any change |
+
+Every 15 minutes, any value that has drifted by a smaller amount is sent anyway, so Home Assistant never falls behind. Everything is sent right away when MQTT reconnects or a setting changes.
 
 ---
 
