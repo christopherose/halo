@@ -91,7 +91,7 @@ If esptool can't find the board, it may need download mode: hold **BOOT**, tap *
 **Notes**
 
 - The entity IDs match a HALO with default names. If you renamed it, or this is your second HALO (Home Assistant adds `_2` to the end of each ID, e.g. `sensor.halo_air_quality_sensor_co2_2`), update the IDs in the file before pasting. You can find them under Settings → Devices & services → Entities.
-- Builds with a **SEN54** instead of a SEN55 have no NOx sensor, so the NOx tile and graph line stay empty. Delete them if you like.
+- Builds with a **SEN54** instead of a SEN55 have no NOx sensor. The NOx tile hides itself, and the NOx line in the VOC graph stays empty (delete it if you like). The HALO web page shows which sensor you have.
 - The 30-day PM2.5 chart fills in as history builds up.
 - Only press **Calibrate CO₂** after HALO has sat outdoors in fresh air for 5+ minutes.
 - Tested on Home Assistant 2026.11.

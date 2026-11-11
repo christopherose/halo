@@ -194,6 +194,13 @@ views:
             name: NOx index
             icon: mdi:smog
             color: amber
+            # SEN54 builds have no NOx channel; hide the tile instead of showing "Unknown"
+            visibility:
+              - condition: state
+                entity: sensor.halo_air_quality_sensor_sen55_nox
+                state_not:
+                  - unknown
+                  - unavailable
 
       # ── Device ───────────────────────────────────────────
       - type: grid
