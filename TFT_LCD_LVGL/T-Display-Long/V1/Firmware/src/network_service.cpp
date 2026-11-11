@@ -17,6 +17,7 @@
 #include "backlight.h"
 #include "display_port.h"
 #include "halo_version.h"
+#include "night_mode.h"
 #include "ring_light.h"
 #include "sensor_hub.h"
 #include "settings.h"
@@ -170,6 +171,8 @@ const char kPortalCss[] =
     "button.warn{background:#f07167}"
     ".actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px}"
     "form.inline{display:inline}"
+    ".check{display:flex;align-items:center;gap:8px;color:#e6e9ef;font-size:14px;margin-top:14px}"
+    ".check input{width:auto;margin:0;accent-color:#3ddc97}"
     ".panel{background:#141820;border-radius:18px;padding:16px 16px 18px}"
     ".split{display:grid;grid-template-columns:1fr 1fr;gap:10px}"
     "@media(max-width:640px){.hero b{font-size:52px}.split{grid-template-columns:1fr}}";
@@ -273,6 +276,26 @@ bool lookup(const char* key, const Readings& r, bool wifi, float& out) {
   if (strcmp(key, "history_count") == 0) { out = sensors().history().count(); return true; }
   return false;
 }
+
+// Smallest move worth sending to Home Assistant. Sub-deadband jitter (PM flickering by
+// 0.1, CO2 by a couple of ppm) otherwise becomes a recorder row every 10 seconds.
+// 0 means "any change at the published precision".
+float deadband(const char* key, float last) {
+  if (strncmp(key, "pm", 2) == 0) return fmaxf(0.5f, fabsf(last) * 0.05f);
+  if (strcmp(key, "co2") == 0) return 5;
+  if (strcmp(key, "computed_aqi") == 0 || strcmp(key, "nowcast_aqi") == 0) return 1;
+  if (strcmp(key, "sen55_temperature") == 0 || strcmp(key, "bme280_temperature") == 0) return 0.2f;
+  if (strcmp(key, "sen55_humidity") == 0 || strcmp(key, "bme280_humidity") == 0) return 1;
+  return 0;
+}
+
+// Even below the deadband, re-send anything that has drifted this often so HA converges.
+constexpr uint32_t kResyncMs = 15UL * 60UL * 1000UL;
+
+constexpr size_t kSensorCount = sizeof(kSensors) / sizeof(kSensors[0]);
+bool sentOk[kSensorCount] = {};
+bool sentAny[kSensorCount] = {};
+float sentValue[kSensorCount] = {};
 
 bool isOn(const char* body) {
   return strcmp(body, "ON") == 0 || strcmp(body, "on") == 0 || strcmp(body, "true") == 0 || strcmp(body, "1") == 0;
@@ -437,7 +460,7 @@ void NetworkService::connectMqtt() {
   mqtt_.subscribe(cmdFilter_);
   mqtt_.publish(statusTopic_, "online", true);
   publishDiscovery();
-  publishStates();
+  publishStates(true);
   publishRing();
   publishBacklight();
   sensors().history().startFlush();
@@ -530,6 +553,7 @@ void NetworkService::publishDiscovery() {
   sw("co2_asc", "CO2 Auto Calibration");
   sw("history", "AQI History Enable Buffering");
   sw("page_rotation", "Auto Page Rotation");
+  sw("night_mode", "Auto Night Mode");
 
   auto num = [&](const char* key, const char* name, float minV, float maxV, float step, const char* unit) {
     JsonDocument doc;
@@ -711,20 +735,40 @@ void NetworkService::publishDiscovery() {
   }
 }
 
-void NetworkService::publishStates() {
+void NetworkService::publishStates(bool force) {
   const Readings& r = sensors().latest();
   bool wifi = wifiConnected();
   char topic[80];
   char value[24];
-  for (const SensorEnt& ent : kSensors) {
-    snprintf(topic, sizeof(topic), "%s/sensor/%s", root_, ent.key);
+  uint32_t now = millis();
+  bool resync = force || now - lastResyncMs_ >= kResyncMs;
+  if (resync) lastResyncMs_ = now;
+  for (size_t i = 0; i < kSensorCount; i++) {
+    const SensorEnt& ent = kSensors[i];
     float number = 0;
-    if (!lookup(ent.key, r, wifi, number)) {
+    bool ok = lookup(ent.key, r, wifi, number);
+    if (ok) {
+      // Compare at the published precision so float noise below it never counts as a change.
+      float p = powf(10.0f, ent.decimals);
+      number = roundf(number * p) / p;
+    }
+    bool send = force || !sentAny[i] || ok != sentOk[i];
+    if (!send && ok) {
+      float moved = fabsf(number - sentValue[i]);
+      float band = deadband(ent.key, sentValue[i]);
+      send = band > 0 ? (moved >= band - 1e-4f || (resync && moved > 0)) : moved > 0;
+    }
+    if (!send) continue;
+    snprintf(topic, sizeof(topic), "%s/sensor/%s", root_, ent.key);
+    if (!ok) {
       mqtt_.publish(topic, "None", true);
     } else {
       snprintf(value, sizeof(value), "%.*f", ent.decimals, number);
       mqtt_.publish(topic, value, true);
     }
+    sentAny[i] = true;
+    sentOk[i] = ok;
+    sentValue[i] = number;
     displayPump();
   }
   snprintf(topic, sizeof(topic), "%s/text/voc_quality", root_);
@@ -744,6 +788,7 @@ void NetworkService::publishStates() {
   pubSwitch("co2_asc", cfg.co2Asc);
   pubSwitch("history", cfg.historyEnabled);
   pubSwitch("page_rotation", cfg.pageRotation);
+  pubSwitch("night_mode", cfg.nightMode);
 
   auto pubNum = [&](const char* key, float number, int decimals) {
     snprintf(topic, sizeof(topic), "%s/number/%s", root_, key);
@@ -825,6 +870,10 @@ void NetworkService::handleCmd(const char* cmd, const char* body) {
     save = true;
   } else if (strcmp(cmd, "switch/history") == 0) {
     cfg.historyEnabled = isOn(body);
+    save = true;
+  } else if (strcmp(cmd, "switch/night_mode") == 0) {
+    cfg.nightMode = isOn(body);
+    nightMode().refresh();
     save = true;
   } else if (strcmp(cmd, "switch/page_rotation") == 0) {
     cfg.pageRotation = isOn(body);
@@ -931,12 +980,12 @@ void NetworkService::handleCmd(const char* cmd, const char* body) {
   if (save) {
     cfg.save();
     sensors().syncBias();
-    if (mqtt_.connected()) publishStates();
+    if (mqtt_.connected()) publishStates(true);
   }
 }
 
 void NetworkService::publishTelemetry() {
-  if (mqtt_.connected()) publishStates();
+  if (mqtt_.connected()) publishStates(true);
 }
 
 void NetworkService::sendSetup() {
@@ -977,11 +1026,76 @@ void NetworkService::appendRingForm(String& page) {
   page += "<label>Brightness</label><input name=brightness type=range min=1 max=255 value=\"";
   page += String(bright);
   page += "\">";
+  const Settings& cfg = settings();
+  page += "<input type=hidden name=night_form value=1>";
+  page += "<label class=check><input type=checkbox name=night value=1";
+  if (cfg.nightMode) page += " checked";
+  page += ">Auto Night Mode</label>";
+  page += "<p class=sub>Sunset to sunrise: ring at 5%, screen at 15%. Daytime levels come back at sunrise.";
+  page += nightStatus();
+  page += "</p><div class=split>";
+  char coord[16] = "";
+  if (!isnan(cfg.nightLat)) snprintf(coord, sizeof(coord), "%.3f", cfg.nightLat);
+  page += "<div><label>Latitude (optional)</label><input name=lat inputmode=decimal placeholder=\"from timezone\" value=\"";
+  page += coord;
+  page += "\"></div>";
+  coord[0] = 0;
+  if (!isnan(cfg.nightLon)) snprintf(coord, sizeof(coord), "%.3f", cfg.nightLon);
+  page += "<div><label>Longitude (optional, west is negative)</label><input name=lon inputmode=decimal placeholder=\"from timezone\" value=\"";
+  page += coord;
+  page += "\"></div></div>";
   page += "<div class=actions><button type=submit>Apply brightness</button>";
   page += "<button class=warn type=submit name=mode value=off>Turn ring off</button></div></form>";
 }
 
+String NetworkService::nightStatus() {
+  const Settings& cfg = settings();
+  float lat, lon;
+  bool estimated;
+  nightMode().location(lat, lon, estimated);
+  String s;
+  char buf[96];
+  time_t sunset, sunrise;
+  if (nightMode().nextTimes(sunset, sunrise)) {
+    auto clock = [&](time_t t, char* out, size_t n) {
+      struct tm lt;
+      localtime_r(&t, &lt);
+      strftime(out, n, cfg.clock24h ? "%H:%M" : "%I:%M %p", &lt);
+      if (!cfg.clock24h && out[0] == '0') memmove(out, out + 1, strlen(out));
+    };
+    char setText[12], riseText[12];
+    clock(sunset, setText, sizeof(setText));
+    clock(sunrise, riseText, sizeof(riseText));
+    if (!cfg.nightMode) snprintf(buf, sizeof(buf), " Sunset %s, sunrise %s.", setText, riseText);
+    else if (nightMode().active()) snprintf(buf, sizeof(buf), " <b>On now</b> until sunrise at %s.", riseText);
+    else snprintf(buf, sizeof(buf), " Starts at sunset, %s.", setText);
+    s += buf;
+  } else {
+    s += " Sun times appear once the clock is set.";
+  }
+  snprintf(buf, sizeof(buf), " Location %.2f, %.2f%s.", lat, lon, estimated ? " (estimated from timezone)" : "");
+  s += buf;
+  return s;
+}
+
 void NetworkService::handleRing() {
+  if (server_.hasArg("night_form")) {
+    Settings& cfg = settings();
+    cfg.nightMode = server_.hasArg("night");
+    auto coord = [&](const char* name, float limit) {
+      String v = server_.arg(name);
+      v.trim();
+      if (v.length() == 0) return (float)NAN;
+      float f = v.toFloat();
+      return fabsf(f) <= limit ? f : (float)NAN;
+    };
+    cfg.nightLat = coord("lat", 90);
+    cfg.nightLon = coord("lon", 180);
+    if (isnan(cfg.nightLat) || isnan(cfg.nightLon)) cfg.nightLat = cfg.nightLon = NAN;
+    cfg.save();
+    nightMode().refresh();
+    if (mqtt_.connected()) publishStates(true);
+  }
   if (server_.hasArg("brightness")) {
     int bright = server_.arg("brightness").toInt();
     if (bright < 1) bright = 1;
