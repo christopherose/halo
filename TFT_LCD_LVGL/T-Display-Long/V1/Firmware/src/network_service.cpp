@@ -279,11 +279,12 @@ bool lookup(const char* key, const Readings& r, bool wifi, float& out) {
 
 // Smallest move worth sending to Home Assistant. Sub-deadband jitter (PM flickering by
 // 0.1, CO2 by a couple of ppm) otherwise becomes a recorder row every 10 seconds.
-// 0 means "any change at the published precision".
+// 0 means "any change at the published precision". computed_aqi is handled separately:
+// it is derived from PM2.5 alone, so it is only re-sent alongside a PM2.5 update.
 float deadband(const char* key, float last) {
   if (strncmp(key, "pm", 2) == 0) return fmaxf(0.5f, fabsf(last) * 0.05f);
   if (strcmp(key, "co2") == 0) return 5;
-  if (strcmp(key, "computed_aqi") == 0 || strcmp(key, "nowcast_aqi") == 0) return 1;
+  if (strcmp(key, "nowcast_aqi") == 0) return 1;
   if (strcmp(key, "sen55_temperature") == 0 || strcmp(key, "bme280_temperature") == 0) return 0.2f;
   if (strcmp(key, "sen55_humidity") == 0 || strcmp(key, "bme280_humidity") == 0) return 1;
   return 0;
@@ -743,6 +744,7 @@ void NetworkService::publishStates(bool force) {
   uint32_t now = millis();
   bool resync = force || now - lastResyncMs_ >= kResyncMs;
   if (resync) lastResyncMs_ = now;
+  bool pm25Sent = false;  // kSensors lists pm25 before computed_aqi
   for (size_t i = 0; i < kSensorCount; i++) {
     const SensorEnt& ent = kSensors[i];
     float number = 0;
@@ -755,10 +757,15 @@ void NetworkService::publishStates(bool force) {
     bool send = force || !sentAny[i] || ok != sentOk[i];
     if (!send && ok) {
       float moved = fabsf(number - sentValue[i]);
-      float band = deadband(ent.key, sentValue[i]);
-      send = band > 0 ? (moved >= band - 1e-4f || (resync && moved > 0)) : moved > 0;
+      if (strcmp(ent.key, "computed_aqi") == 0) {
+        send = moved > 0 && (pm25Sent || resync);
+      } else {
+        float band = deadband(ent.key, sentValue[i]);
+        send = band > 0 ? (moved >= band - 1e-4f || (resync && moved > 0)) : moved > 0;
+      }
     }
     if (!send) continue;
+    if (strcmp(ent.key, "pm25") == 0) pm25Sent = true;
     snprintf(topic, sizeof(topic), "%s/sensor/%s", root_, ent.key);
     if (!ok) {
       mqtt_.publish(topic, "None", true);
